@@ -8,7 +8,8 @@
 # O que faz:
 #   1. Instala o Docker (se faltar) e libera só as portas 22, 80 e 443.
 #   2. Cria /opt/cncold-whatsapp com senhas e chave de API fortes, geradas aqui.
-#   3. Sobe Evolution API 2.3.7, Postgres 16, Redis 7 e Caddy (HTTPS automático).
+#   3. Sobe Evolution API 2.3.7, Postgres 16, Redis 7, serviço de mídias e Caddy (HTTPS automático).
+#      Mídias (fotos, vídeos, áudios, documentos de todos os números) ficam na VPS: /midia/* no mesmo domínio.
 #   4. Agenda backup diário do banco (guarda 14 dias).
 #
 # Pode rodar de novo sem perder nada: senhas já criadas são mantidas.
@@ -68,9 +69,11 @@ if [[ -f .env ]]; then
   azul "Mantendo senhas existentes de $PASTA/.env"
   POSTGRES_PASSWORD="$(grep -E '^POSTGRES_PASSWORD=' .env | cut -d= -f2- || true)"
   AUTHENTICATION_API_KEY="$(grep -E '^AUTHENTICATION_API_KEY=' .env | cut -d= -f2- || true)"
+  MIDIA_SEGREDO="$(grep -E '^MIDIA_SEGREDO=' .env | cut -d= -f2- || true)"
 fi
 POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-$(segredo 24)}"
 EVOLUTION_API_KEY="${AUTHENTICATION_API_KEY:-$(segredo 32)}"
+MIDIA_SEGREDO="${MIDIA_SEGREDO:-$(segredo 32)}"
 
 cat > .env <<EOF
 # Gerado por install.sh em $(date -Iseconds). NÃO compartilhe este arquivo.
@@ -80,6 +83,10 @@ EMAIL_HTTPS=$EMAIL
 POSTGRES_USER=evolution
 POSTGRES_PASSWORD=$POSTGRES_PASSWORD
 POSTGRES_DB=evolution
+
+# --- Serviço de mídias (vps/midia/servidor.mjs) ---
+MIDIA_SEGREDO=$MIDIA_SEGREDO
+MIDIA_LIMITE_MB=100
 
 # --- Evolution API ---
 SERVER_TYPE=http
@@ -109,7 +116,8 @@ DATABASE_SAVE_MESSAGE_UPDATE=true
 DATABASE_SAVE_DATA_CONTACTS=true
 DATABASE_SAVE_DATA_CHATS=true
 DATABASE_SAVE_DATA_LABELS=true
-DATABASE_SAVE_DATA_HISTORIC=false
+# guarda o histórico importado do celular (necessário para baixar mídias antigas depois)
+DATABASE_SAVE_DATA_HISTORIC=true
 DATABASE_SAVE_IS_ON_WHATSAPP=true
 DATABASE_SAVE_IS_ON_WHATSAPP_DAYS=7
 DATABASE_DELETE_MESSAGE=false
@@ -121,8 +129,10 @@ CACHE_REDIS_PREFIX_KEY=evolution
 CACHE_REDIS_SAVE_INSTANCES=false
 CACHE_LOCAL_ENABLED=false
 
-CONFIG_SESSION_PHONE_CLIENT="CN Cold"
-CONFIG_SESSION_PHONE_NAME=Chrome
+# "Desktop" faz o celular enviar o HISTÓRICO COMPLETO ao conectar (navegador comum recebe só o recente).
+# No celular o aparelho aparece como "Mac OS".
+CONFIG_SESSION_PHONE_CLIENT="Mac OS"
+CONFIG_SESSION_PHONE_NAME=Desktop
 QRCODE_LIMIT=30
 QRCODE_COLOR="#0B3D91"
 
@@ -189,10 +199,25 @@ services:
     volumes:
       - redis_data:/data
 
+  midia:
+    image: node:22-alpine
+    restart: unless-stopped
+    command: ["node", "/app/servidor.mjs"]
+    environment:
+      MIDIA_SEGREDO: \${MIDIA_SEGREDO}
+      MIDIA_LIMITE_MB: \${MIDIA_LIMITE_MB}
+      MIDIA_PASTA: /dados
+      MIDIA_PORTA: "3000"
+    volumes:
+      - ./midia:/app:ro
+      - midia_dados:/dados
+    expose: ["3000"]
+    logging: { driver: json-file, options: { max-size: "10m", max-file: "3" } }
+
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
-    depends_on: [evolution]
+    depends_on: [evolution, midia]
     ports: ["80:80", "443:443"]
     environment:
       DOMINIO: \${DOMINIO}
@@ -203,6 +228,7 @@ services:
       - caddy_config:/config
 
 volumes:
+  midia_dados:
   evolution_instances:
   postgres_data:
   redis_data:
@@ -220,11 +246,175 @@ cat >> Caddyfile <<'EOF'
 		-Server
 	}
 	request_body {
-		max_size 64MB
+		max_size 110MB
 	}
-	reverse_proxy evolution:8080
+	handle /midia/* {
+		reverse_proxy midia:3000
+	}
+	handle {
+		reverse_proxy evolution:8080
+	}
 }
 EOF
+
+# --- 3b. Serviço de mídias ----------------------------------------------------
+mkdir -p midia
+cat > midia/servidor.mjs <<'EOF_MIDIA'
+// CN Cold WhatsApp — serviço de mídias na VPS (fotos, vídeos, áudios, documentos de todos os números).
+// Só Node 22, sem dependências. Roda no Docker atrás do Caddy em https://<domínio>/midia/...
+//
+//   PUT    /midia/<caminho>          Authorization: Bearer <MIDIA_SEGREDO>; Content-Type; corpo = arquivo  → grava
+//   GET    /midia/<caminho>?exp=&sig=[&nome=]                                                             → baixa (link temporário)
+//   DELETE /midia/<caminho>          Authorization: Bearer <MIDIA_SEGREDO>                                → apaga
+//   GET    /midia/_espaco            Authorization: Bearer <MIDIA_SEGREDO>                                → uso do disco
+//   GET    /midia/_saude                                                                                  → "ok"
+//
+// Link temporário: sig = HMAC-SHA256(MIDIA_SEGREDO, `${caminho}\n${exp}\n${nome}`) em hex; exp = unix (segundos).
+// Quem gera os links é a central (Lovable), que tem o mesmo segredo. Nada é público sem assinatura.
+import { createHmac, timingSafeEqual } from "node:crypto";
+import { createReadStream, createWriteStream } from "node:fs";
+import { mkdir, readFile, rename, rm, stat, statfs, writeFile } from "node:fs/promises";
+import http from "node:http";
+import { dirname, join, normalize } from "node:path";
+import { pipeline } from "node:stream/promises";
+
+const SEGREDO = process.env.MIDIA_SEGREDO ?? "";
+const PASTA = process.env.MIDIA_PASTA ?? "/dados";
+const PORTA = Number(process.env.MIDIA_PORTA ?? 3000);
+const LIMITE = Number(process.env.MIDIA_LIMITE_MB ?? 100) * 1024 * 1024;
+
+if (SEGREDO.length < 32) {
+  console.error("MIDIA_SEGREDO ausente ou curto demais (mínimo 32 caracteres).");
+  process.exit(1);
+}
+
+const CAMINHO_OK = /^[A-Za-z0-9][A-Za-z0-9/_.\-]{0,400}$/;
+
+export function assinar(segredo, caminho, exp, nome = "") {
+  return createHmac("sha256", segredo).update(`${caminho}\n${exp}\n${nome}`).digest("hex");
+}
+
+function iguais(a, b) {
+  const x = Buffer.from(String(a));
+  const y = Buffer.from(String(b));
+  return x.length === y.length && timingSafeEqual(x, y);
+}
+
+function responder(res, status, corpo, tipo = "application/json") {
+  const txt = typeof corpo === "string" ? corpo : JSON.stringify(corpo);
+  res.writeHead(status, { "content-type": tipo, "cache-control": "no-store" });
+  res.end(txt);
+}
+
+function caminhoSeguro(bruto) {
+  let c;
+  try {
+    c = decodeURIComponent(bruto);
+  } catch {
+    return null;
+  }
+  if (!CAMINHO_OK.test(c) || c.includes("..") || c.includes("//") || c.endsWith(".meta.json")) return null;
+  const abs = normalize(join(PASTA, c));
+  if (!abs.startsWith(normalize(PASTA) + "/")) return null;
+  return { rel: c, abs };
+}
+
+const autorizado = (req) => iguais(req.headers.authorization ?? "", `Bearer ${SEGREDO}`);
+
+function nomeSeguro(n) {
+  return String(n ?? "").replace(/[^\w.\- ()À-ÿ]/g, "_").slice(0, 150);
+}
+
+export const servidor = http.createServer(async (req, res) => {
+  try {
+    const url = new URL(req.url ?? "/", "http://x");
+    if (!url.pathname.startsWith("/midia/")) return responder(res, 404, { erro: "não encontrado" });
+    const resto = url.pathname.slice("/midia/".length);
+
+    if (resto === "_saude") return responder(res, 200, "ok", "text/plain");
+    if (resto === "_espaco") {
+      if (!autorizado(req)) return responder(res, 401, { erro: "não autorizado" });
+      const s = await statfs(PASTA);
+      return responder(res, 200, { total: s.blocks * s.bsize, livre: s.bavail * s.bsize });
+    }
+
+    const c = caminhoSeguro(resto);
+    if (!c) return responder(res, 400, { erro: "caminho inválido" });
+
+    if (req.method === "PUT") {
+      if (!autorizado(req)) return responder(res, 401, { erro: "não autorizado" });
+      const tamanho = Number(req.headers["content-length"] ?? 0);
+      if (tamanho > LIMITE) return responder(res, 413, { erro: "arquivo grande demais" });
+      await mkdir(dirname(c.abs), { recursive: true });
+      const tmp = `${c.abs}.${process.pid}.${Date.now()}.tmp`;
+      let recebidos = 0;
+      req.on("data", (p) => {
+        recebidos += p.length;
+        if (recebidos > LIMITE) req.destroy(new Error("limite"));
+      });
+      try {
+        await pipeline(req, createWriteStream(tmp));
+      } catch {
+        await rm(tmp, { force: true });
+        return responder(res, recebidos > LIMITE ? 413 : 400, { erro: "falha ao receber o arquivo" });
+      }
+      await rename(tmp, c.abs);
+      const mime = String(req.headers["content-type"] ?? "application/octet-stream").slice(0, 120);
+      await writeFile(`${c.abs}.meta.json`, JSON.stringify({ mime, bytes: recebidos, gravado_em: new Date().toISOString() }));
+      return responder(res, 201, { ok: true, caminho: c.rel, bytes: recebidos });
+    }
+
+    if (req.method === "DELETE") {
+      if (!autorizado(req)) return responder(res, 401, { erro: "não autorizado" });
+      await rm(c.abs, { force: true });
+      await rm(`${c.abs}.meta.json`, { force: true });
+      return responder(res, 200, { ok: true });
+    }
+
+    if (req.method === "GET" || req.method === "HEAD") {
+      const exp = url.searchParams.get("exp") ?? "";
+      const sig = url.searchParams.get("sig") ?? "";
+      const nome = url.searchParams.get("nome") ?? "";
+      if (!/^\d+$/.test(exp) || Number(exp) < Math.floor(Date.now() / 1000)) return responder(res, 403, { erro: "link expirado" });
+      if (!iguais(assinar(SEGREDO, c.rel, exp, nome), sig)) return responder(res, 403, { erro: "assinatura inválida" });
+      let info;
+      try {
+        info = await stat(c.abs);
+      } catch {
+        return responder(res, 404, { erro: "arquivo não encontrado" });
+      }
+      let mime = "application/octet-stream";
+      try {
+        mime = JSON.parse(await readFile(`${c.abs}.meta.json`, "utf8")).mime ?? mime;
+      } catch {
+        /* sem metadados */
+      }
+      const cab = {
+        "content-type": mime,
+        "content-length": String(info.size),
+        "cache-control": "private, max-age=3600",
+        "x-content-type-options": "nosniff",
+        "accept-ranges": "none",
+      };
+      if (nome) cab["content-disposition"] = `attachment; filename*=UTF-8''${encodeURIComponent(nomeSeguro(nome))}`;
+      res.writeHead(200, cab);
+      if (req.method === "HEAD") return res.end();
+      return pipeline(createReadStream(c.abs), res).catch(() => res.destroy());
+    }
+
+    return responder(res, 405, { erro: "método não permitido" });
+  } catch (e) {
+    console.error(e);
+    if (!res.headersSent) responder(res, 500, { erro: "erro interno" });
+    else res.destroy();
+  }
+});
+
+if (process.env.MIDIA_NAO_INICIAR !== "1") {
+  await mkdir(PASTA, { recursive: true });
+  servidor.listen(PORTA, () => console.log(`midia: ouvindo na porta ${PORTA}, pasta ${PASTA}`));
+}
+EOF_MIDIA
 
 # --- 4. Backup diário --------------------------------------------------------
 cat > backup.sh <<'EOF'
@@ -262,11 +452,13 @@ verde "=============================================================="
 verde " Pronto! Evolution API em: https://$DOMINIO"
 verde "=============================================================="
 echo
-echo "Copie os dois valores abaixo para o Lovable (projeto CN Cold WhatsApp → Cloud → Secrets)."
+echo "Copie os valores abaixo para o Lovable (projeto CN Cold WhatsApp → Cloud → Secrets)."
 echo "NÃO cole em chat, e-mail ou WhatsApp."
 echo
 echo "  EVOLUTION_URL     = https://$DOMINIO"
 echo "  EVOLUTION_API_KEY = $EVOLUTION_API_KEY"
+echo "  MIDIA_URL         = https://$DOMINIO"
+echo "  MIDIA_SEGREDO     = $MIDIA_SEGREDO"
 echo
-echo "Para ver a chave de novo depois:  grep AUTHENTICATION_API_KEY $PASTA/.env"
+echo "Para ver de novo depois:          grep -E 'AUTHENTICATION_API_KEY|MIDIA_SEGREDO' $PASTA/.env"
 echo "Status dos serviços:              cd $PASTA && docker compose ps"
