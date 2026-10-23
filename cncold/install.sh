@@ -51,10 +51,10 @@ if [[ "$SKIP_DOCKER" != "1" ]]; then
 
   if command -v ufw >/dev/null 2>&1; then
     azul "Configurando firewall (22, 80, 443)..."
-    ufw allow 22/tcp >/dev/null
-    ufw allow 80/tcp >/dev/null
-    ufw allow 443/tcp >/dev/null
-    ufw --force enable >/dev/null
+    # nunca interrompe a instalação por causa do firewall (o painel da Hostinger também tem firewall)
+    { ufw allow 22/tcp && ufw allow 80/tcp && ufw allow 443/tcp && ufw --force enable; } >/dev/null 2>&1 \
+      && echo "Firewall ativo." \
+      || echo "Aviso: não foi possível ativar o firewall do Ubuntu (seguindo assim mesmo)."
   fi
 fi
 
