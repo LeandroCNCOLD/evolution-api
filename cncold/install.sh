@@ -15,6 +15,7 @@
 # Antes de rodar: o DNS do domínio (registro A) precisa apontar para o IP desta VPS.
 # =============================================================================
 set -euo pipefail
+trap 'printf "\033[1;31mERRO na linha %s: %s\033[0m\nMande um print desta tela.\n" "$LINENO" "$BASH_COMMAND" >&2' ERR
 
 DOMINIO="${1:-}"
 EMAIL="${2:-}"
@@ -238,7 +239,11 @@ EOF
 chmod +x backup.sh
 
 if [[ "$SKIP_DOCKER" != "1" ]]; then
-  ( crontab -l 2>/dev/null | grep -v "$PASTA/backup.sh" ; echo "30 3 * * * $PASTA/backup.sh >> $PASTA/backups/backup.log 2>&1" ) | crontab -
+  # backup diário às 03:30 (arquivo próprio em /etc/cron.d; não mexe no crontab do root)
+  command -v cron >/dev/null 2>&1 || apt-get install -y cron >/dev/null 2>&1 || true
+  echo "30 3 * * * root $PASTA/backup.sh >> $PASTA/backups/backup.log 2>&1" > /etc/cron.d/cncold-whatsapp-backup
+  chmod 644 /etc/cron.d/cncold-whatsapp-backup
+  systemctl enable --now cron >/dev/null 2>&1 || true
 
   azul "Baixando imagens e subindo os serviços (pode levar alguns minutos)..."
   docker compose pull
