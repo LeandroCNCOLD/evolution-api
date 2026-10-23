@@ -85,7 +85,9 @@ POSTGRES_DB=evolution
 SERVER_TYPE=http
 SERVER_PORT=8080
 SERVER_URL=https://$DOMINIO
-CORS_ORIGIN=https://$DOMINIO
+# "*" é obrigatório: a Evolution 2.3.7 recusa (erro 500) chamadas sem cabeçalho Origin — justamente as do servidor do Lovable.
+# A proteção real é a chave de API (AUTHENTICATION_API_KEY), não o CORS.
+CORS_ORIGIN=*
 CORS_METHODS=GET,POST,PUT,DELETE
 CORS_CREDENTIALS=true
 TELEMETRY_ENABLED=false
