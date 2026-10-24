@@ -13,6 +13,7 @@
 #   4. Agenda backup diário do banco (guarda 14 dias).
 #
 # Pode rodar de novo sem perder nada: senhas já criadas são mantidas.
+# Trocar a chave da Evolution e o segredo das mídias (se vazaram):  TROCAR_CHAVES=1 bash install.sh <domínio>
 # Antes de rodar: o DNS do domínio (registro A) precisa apontar para o IP desta VPS.
 # =============================================================================
 set -euo pipefail
@@ -72,6 +73,11 @@ if [[ -f .env ]]; then
   MIDIA_SEGREDO="$(grep -E '^MIDIA_SEGREDO=' .env | cut -d= -f2- || true)"
 fi
 POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-$(segredo 24)}"
+if [[ "${TROCAR_CHAVES:-0}" == "1" ]]; then
+  azul "Gerando chave da Evolution e segredo das mídias NOVOS (atualize os Secrets do Lovable depois)."
+  AUTHENTICATION_API_KEY=""
+  MIDIA_SEGREDO=""
+fi
 EVOLUTION_API_KEY="${AUTHENTICATION_API_KEY:-$(segredo 32)}"
 MIDIA_SEGREDO="${MIDIA_SEGREDO:-$(segredo 32)}"
 
