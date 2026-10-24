@@ -331,6 +331,21 @@ export class BaileysStartupService extends ChannelStartupService {
     };
   }
 
+  // Evita avalanche de sockets quando múltiplos eventos "close" chegam em sequência.
+  // Uma única reconexão fica agendada por instância a cada tentativa.
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
+  private scheduleReconnect(): void {
+    if (this.reconnectTimer || this.endSession) return;
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      if (this.endSession || this.stateConnection?.state === 'open') return;
+      void this.connectToWhatsapp(this.phoneNumber).catch((error) => {
+        this.logger.error(`Reconnect failed: ${String(error)}`);
+      });
+    }, 5000);
+  }
+
   private async connectionUpdate({ qr, connection, lastDisconnect }: Partial<ConnectionState>) {
     if (qr) {
       if (this.instance.qrcode.count === this.configService.get<QrCode>('QRCODE').LIMIT) {
@@ -428,7 +443,7 @@ export class BaileysStartupService extends ChannelStartupService {
       const codesToNotReconnect = [DisconnectReason.loggedOut, DisconnectReason.forbidden, 402, 406];
       const shouldReconnect = !codesToNotReconnect.includes(statusCode);
       if (shouldReconnect) {
-        await this.connectToWhatsapp(this.phoneNumber);
+        this.scheduleReconnect();
       } else {
         this.sendDataWebhook(Events.STATUS_INSTANCE, {
           instance: this.instance.name,
@@ -465,6 +480,10 @@ export class BaileysStartupService extends ChannelStartupService {
     }
 
     if (connection === 'open') {
+      if (this.reconnectTimer) {
+        clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = null;
+      }
       this.instance.wuid = this.client.user.id.replace(/:\d+/, '');
       try {
         const profilePic = await this.profilePicture(this.instance.wuid);
