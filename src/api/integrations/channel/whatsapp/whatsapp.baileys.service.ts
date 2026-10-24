@@ -449,6 +449,15 @@ export class BaileysStartupService extends ChannelStartupService {
 
     if (connection === 'close') {
       const statusCode = (lastDisconnect?.error as Boom)?.output?.statusCode;
+      // Apenas diagnóstico estrutural; nunca registrar mensagem, payload, tokens ou credenciais.
+      const rawError = lastDisconnect?.error as
+        | (Error & { code?: string | number; output?: { statusCode?: number } })
+        | undefined;
+      const errorType = rawError?.name ?? 'unknown';
+      const errorCode = rawError?.code ?? 'unknown';
+      this.logger.warn(
+        `Baileys connection closed: instance=${this.instance.name}, status=${String(statusCode ?? 'unknown')}, type=${errorType}, code=${String(errorCode)}`,
+      );
       const codesToNotReconnect = [DisconnectReason.loggedOut, DisconnectReason.forbidden, 402, 406];
       const shouldReconnect = !codesToNotReconnect.includes(statusCode);
       if (shouldReconnect) {
