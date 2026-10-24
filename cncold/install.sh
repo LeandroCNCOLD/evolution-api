@@ -452,6 +452,22 @@ if [[ "$SKIP_DOCKER" != "1" ]]; then
     if docker compose exec -T evolution wget -qO- http://localhost:8080 >/dev/null 2>&1; then break; fi
     sleep 3
   done
+
+  # O Caddy não relê o Caddyfile sozinho: recria para valer a rota /midia/* (senão /midia cai na Evolution e dá "Cannot PUT /midia/...").
+  docker compose up -d --force-recreate caddy
+
+  azul "Conferindo o serviço de mídias..."
+  MIDIA_OK=0
+  for _ in $(seq 1 20); do
+    if [[ "$(curl -fsS -m 5 "https://$DOMINIO/midia/_saude" 2>/dev/null)" == "ok" ]]; then MIDIA_OK=1; break; fi
+    sleep 3
+  done
+  if [[ $MIDIA_OK == 1 ]]; then
+    verde "Serviço de mídias OK em https://$DOMINIO/midia/_saude"
+  else
+    amarelo "Serviço de mídias NÃO respondeu em https://$DOMINIO/midia/_saude."
+    amarelo "Veja: cd $PASTA && docker compose ps && docker compose logs --tail=50 midia caddy"
+  fi
 fi
 
 verde "=============================================================="
