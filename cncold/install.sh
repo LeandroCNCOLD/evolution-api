@@ -128,12 +128,12 @@ DATABASE_SAVE_IS_ON_WHATSAPP=true
 DATABASE_SAVE_IS_ON_WHATSAPP_DAYS=7
 DATABASE_DELETE_MESSAGE=false
 
-CACHE_REDIS_ENABLED=true
+CACHE_REDIS_ENABLED=false
 CACHE_REDIS_URI=redis://redis:6379/6
 CACHE_REDIS_TTL=604800
 CACHE_REDIS_PREFIX_KEY=evolution
 CACHE_REDIS_SAVE_INSTANCES=false
-CACHE_LOCAL_ENABLED=false
+CACHE_LOCAL_ENABLED=true
 
 # "Desktop" faz o celular enviar o HISTÓRICO COMPLETO ao conectar (navegador comum recebe só o recente).
 # No celular o aparelho aparece como "Mac OS".
