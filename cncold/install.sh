@@ -401,8 +401,12 @@ export const servidor = http.createServer(async (req, res) => {
         "cache-control": "private, max-age=3600",
         "x-content-type-options": "nosniff",
         "accept-ranges": "none",
+        // arquivo vindo de cliente nunca roda script neste domínio (o mesmo da Evolution)
+        "content-security-policy": "sandbox; default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'",
       };
-      if (nome) cab["content-disposition"] = `attachment; filename*=UTF-8''${encodeURIComponent(nomeSeguro(nome))}`;
+      const perigoso = /html|svg|xml|javascript|ecmascript/i.test(mime);
+      if (nome || perigoso)
+        cab["content-disposition"] = `attachment; filename*=UTF-8''${encodeURIComponent(nomeSeguro(nome || "arquivo"))}`;
       res.writeHead(200, cab);
       if (req.method === "HEAD") return res.end();
       return pipeline(createReadStream(c.abs), res).catch(() => res.destroy());
