@@ -3,6 +3,8 @@ on:
   pull_request:
     paths:
       - 'src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts'
+      - 'Dockerfile'
+      - 'cncold/IMPLANTACAO-RECONEXAO.md'
       - '.github/workflows/cncold-verificar.yml'
   workflow_dispatch:
 jobs:
@@ -19,3 +21,5 @@ jobs:
         env:
           DATABASE_PROVIDER: postgresql
       - run: npm run build
+      - name: Construir imagem Docker candidata
+        run: docker build -t cncold/evolution-api:ci .
