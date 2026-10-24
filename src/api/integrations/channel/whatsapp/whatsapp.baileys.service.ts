@@ -619,8 +619,15 @@ export class BaileysStartupService extends ChannelStartupService {
       this.logger.info(`Browser: ${browser}`);
     }
 
-    const baileysVersion = await fetchLatestWaWebVersion({});
-    const version = baileysVersion.version;
+    // Override opcional e validado: a imagem oficial 2.3.7 ignora esta variável.
+    // Sem override, mantém a busca automática original.
+    const configuredVersion = process.env.CONFIG_SESSION_PHONE_VERSION?.trim();
+    const version = configuredVersion && /^\\d+\\.\\d+\\.\\d+$/.test(configuredVersion)
+      ? (configuredVersion.split('.').map(Number) as [number, number, number])
+      : (await fetchLatestWaWebVersion({})).version;
+    if (configuredVersion && !/^\\d+\\.\\d+\\.\\d+$/.test(configuredVersion)) {
+      this.logger.warn('CONFIG_SESSION_PHONE_VERSION inválida; usando detecção automática.');
+    }
     const log = `Baileys version: ${version.join('.')}`;
 
     this.logger.info(log);
