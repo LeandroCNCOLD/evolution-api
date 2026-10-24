@@ -331,6 +331,30 @@ export class BaileysStartupService extends ChannelStartupService {
     };
   }
 
+  // Uma única tentativa de reconexão por vez e intervalo mínimo entre tentativas.
+  // Eventos 'close' em sequência não podem iniciar dezenas de sockets por segundo.
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectInFlight = false;
+  private lastReconnectAt = 0;
+
+  private scheduleReconnect(): void {
+    if (this.reconnectTimer || this.reconnectInFlight || this.endSession) return;
+    const delayMs = Math.max(5000, 5000 - (Date.now() - this.lastReconnectAt));
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      if (this.endSession || this.stateConnection?.state === 'open' || this.reconnectInFlight) return;
+      this.reconnectInFlight = true;
+      this.lastReconnectAt = Date.now();
+      void this.connectToWhatsapp(this.phoneNumber)
+        .catch((error) => {
+          this.logger.error(`Reconnect failed: ${String(error)}`);
+        })
+        .finally(() => {
+          this.reconnectInFlight = false;
+        });
+    }, delayMs);
+  }
+
   private async connectionUpdate({ qr, connection, lastDisconnect }: Partial<ConnectionState>) {
     if (qr) {
       if (this.instance.qrcode.count === this.configService.get<QrCode>('QRCODE').LIMIT) {
@@ -425,10 +449,19 @@ export class BaileysStartupService extends ChannelStartupService {
 
     if (connection === 'close') {
       const statusCode = (lastDisconnect?.error as Boom)?.output?.statusCode;
+      // Apenas diagnóstico estrutural; nunca registrar mensagem, payload, tokens ou credenciais.
+      const rawError = lastDisconnect?.error as
+        | (Error & { code?: string | number; output?: { statusCode?: number } })
+        | undefined;
+      const errorType = rawError?.name ?? 'unknown';
+      const errorCode = rawError?.code ?? 'unknown';
+      this.logger.warn(
+        `Baileys connection closed: instance=${this.instance.name}, status=${String(statusCode ?? 'unknown')}, type=${errorType}, code=${String(errorCode)}`,
+      );
       const codesToNotReconnect = [DisconnectReason.loggedOut, DisconnectReason.forbidden, 402, 406];
       const shouldReconnect = !codesToNotReconnect.includes(statusCode);
       if (shouldReconnect) {
-        await this.connectToWhatsapp(this.phoneNumber);
+        this.scheduleReconnect();
       } else {
         this.sendDataWebhook(Events.STATUS_INSTANCE, {
           instance: this.instance.name,
@@ -465,6 +498,10 @@ export class BaileysStartupService extends ChannelStartupService {
     }
 
     if (connection === 'open') {
+      if (this.reconnectTimer) {
+        clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = null;
+      }
       this.instance.wuid = this.client.user.id.replace(/:\d+/, '');
       try {
         const profilePic = await this.profilePicture(this.instance.wuid);
@@ -591,8 +628,16 @@ export class BaileysStartupService extends ChannelStartupService {
       this.logger.info(`Browser: ${browser}`);
     }
 
-    const baileysVersion = await fetchLatestWaWebVersion({});
-    const version = baileysVersion.version;
+    // Override opcional e validado: a imagem oficial 2.3.7 ignora esta variável.
+    // Sem override, mantém a busca automática original.
+    const configuredVersion = process.env.CONFIG_SESSION_PHONE_VERSION?.trim();
+    const validVersion = configuredVersion && /^\d+\.\d+\.\d+$/.test(configuredVersion);
+    const version = validVersion
+      ? (configuredVersion.split('.').map(Number) as [number, number, number])
+      : (await fetchLatestWaWebVersion({})).version;
+    if (configuredVersion && !validVersion) {
+      this.logger.warn('CONFIG_SESSION_PHONE_VERSION inválida; usando detecção automática.');
+    }
     const log = `Baileys version: ${version.join('.')}`;
 
     this.logger.info(log);
