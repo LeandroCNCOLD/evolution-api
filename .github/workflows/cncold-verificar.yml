@@ -1,0 +1,21 @@
+name: Validar correção CN COLD
+on:
+  pull_request:
+    paths:
+      - 'src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts'
+      - '.github/workflows/cncold-verificar.yml'
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run db:generate
+        env:
+          DATABASE_PROVIDER: postgresql
+      - run: npm run build
