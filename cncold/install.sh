@@ -27,6 +27,7 @@ EVOLUTION_VERSAO="v2.3.7"
 
 azul()  { printf '\033[1;34m%s\033[0m\n' "$*"; }
 verde() { printf '\033[1;32m%s\033[0m\n' "$*"; }
+amarelo() { printf '\033[1;33m%s\033[0m\n' "$*"; }
 erro()  { printf '\033[1;31mERRO: %s\033[0m\n' "$*" >&2; exit 1; }
 
 [[ -n "$DOMINIO" ]] || read -rp "Domínio (ex.: whatsapp.cncold.com.br): " DOMINIO
@@ -448,8 +449,15 @@ if [[ "$SKIP_DOCKER" != "1" ]]; then
   systemctl enable --now cron >/dev/null 2>&1 || true
 
   azul "Baixando imagens e subindo os serviços (pode levar alguns minutos)..."
-  docker compose pull
-  docker compose up -d
+  # Imagem corrigida da Evolution (docker-compose.fix.yml, feita na VPS a partir do fork): se existir, continua valendo.
+  if [[ -f docker-compose.fix.yml ]]; then
+    COMPOSE=(docker compose -f docker-compose.yml -f docker-compose.fix.yml)
+    azul "Usando também docker-compose.fix.yml (imagem corrigida da Evolution)."
+  else
+    COMPOSE=(docker compose)
+  fi
+  "${COMPOSE[@]}" pull --ignore-pull-failures || true
+  "${COMPOSE[@]}" up -d
 
   azul "Aguardando a Evolution responder..."
   for _ in $(seq 1 60); do
@@ -458,7 +466,7 @@ if [[ "$SKIP_DOCKER" != "1" ]]; then
   done
 
   # O Caddy não relê o Caddyfile sozinho: recria para valer a rota /midia/* (senão /midia cai na Evolution e dá "Cannot PUT /midia/...").
-  docker compose up -d --force-recreate caddy
+  "${COMPOSE[@]}" up -d --force-recreate caddy
 
   azul "Conferindo o serviço de mídias..."
   MIDIA_OK=0
