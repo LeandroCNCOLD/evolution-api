@@ -72,6 +72,9 @@ if [[ -f .env ]]; then
   POSTGRES_PASSWORD="$(grep -E '^POSTGRES_PASSWORD=' .env | cut -d= -f2- || true)"
   AUTHENTICATION_API_KEY="$(grep -E '^AUTHENTICATION_API_KEY=' .env | cut -d= -f2- || true)"
   MIDIA_SEGREDO="$(grep -E '^MIDIA_SEGREDO=' .env | cut -d= -f2- || true)"
+  # identificação da sessão no WhatsApp: mantém a que estiver em uso (foi ajustada à mão em 24/10 para gerar o QR)
+  SESSAO_CLIENTE="$(grep -E '^CONFIG_SESSION_PHONE_CLIENT=' .env | cut -d= -f2- | tr -d '"' || true)"
+  SESSAO_NOME="$(grep -E '^CONFIG_SESSION_PHONE_NAME=' .env | cut -d= -f2- | tr -d '"' || true)"
 fi
 POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-$(segredo 24)}"
 if [[ "${TROCAR_CHAVES:-0}" == "1" ]]; then
@@ -138,8 +141,8 @@ CACHE_LOCAL_ENABLED=true
 
 # "Desktop" faz o celular enviar o HISTÓRICO COMPLETO ao conectar (navegador comum recebe só o recente).
 # No celular o aparelho aparece como "Mac OS".
-CONFIG_SESSION_PHONE_CLIENT="Mac OS"
-CONFIG_SESSION_PHONE_NAME=Desktop
+CONFIG_SESSION_PHONE_CLIENT="${SESSAO_CLIENTE:-Mac OS}"
+CONFIG_SESSION_PHONE_NAME="${SESSAO_NOME:-Desktop}"
 QRCODE_LIMIT=30
 QRCODE_COLOR="#0B3D91"
 
