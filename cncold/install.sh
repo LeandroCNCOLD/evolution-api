@@ -71,6 +71,7 @@ if [[ -f .env ]]; then
   POSTGRES_PASSWORD="$(grep -E '^POSTGRES_PASSWORD=' .env | cut -d= -f2- || true)"
   AUTHENTICATION_API_KEY="$(grep -E '^AUTHENTICATION_API_KEY=' .env | cut -d= -f2- || true)"
   MIDIA_SEGREDO="$(grep -E '^MIDIA_SEGREDO=' .env | cut -d= -f2- || true)"
+  CONFIG_SESSION_PHONE_VERSION="${CONFIG_SESSION_PHONE_VERSION:-$(grep -E '^CONFIG_SESSION_PHONE_VERSION=' .env | cut -d= -f2- || true)}"
 fi
 POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-$(segredo 24)}"
 if [[ "${TROCAR_CHAVES:-0}" == "1" ]]; then
@@ -139,6 +140,7 @@ CACHE_LOCAL_ENABLED=true
 # No celular o aparelho aparece como "Mac OS".
 CONFIG_SESSION_PHONE_CLIENT="Mac OS"
 CONFIG_SESSION_PHONE_NAME=Desktop
+CONFIG_SESSION_PHONE_VERSION=${CONFIG_SESSION_PHONE_VERSION:-}
 QRCODE_LIMIT=30
 QRCODE_COLOR="#0B3D91"
 
