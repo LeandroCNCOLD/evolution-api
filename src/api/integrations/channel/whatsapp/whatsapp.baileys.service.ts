@@ -331,19 +331,28 @@ export class BaileysStartupService extends ChannelStartupService {
     };
   }
 
-  // Evita avalanche de sockets quando múltiplos eventos "close" chegam em sequência.
-  // Uma única reconexão fica agendada por instância a cada tentativa.
+  // Uma única tentativa de reconexão por vez e intervalo mínimo entre tentativas.
+  // Eventos 'close' em sequência não podem iniciar dezenas de sockets por segundo.
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectInFlight = false;
+  private lastReconnectAt = 0;
 
   private scheduleReconnect(): void {
-    if (this.reconnectTimer || this.endSession) return;
+    if (this.reconnectTimer || this.reconnectInFlight || this.endSession) return;
+    const delayMs = Math.max(5000, 5000 - (Date.now() - this.lastReconnectAt));
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
-      if (this.endSession || this.stateConnection?.state === 'open') return;
-      void this.connectToWhatsapp(this.phoneNumber).catch((error) => {
-        this.logger.error(`Reconnect failed: ${String(error)}`);
-      });
-    }, 5000);
+      if (this.endSession || this.stateConnection?.state === 'open' || this.reconnectInFlight) return;
+      this.reconnectInFlight = true;
+      this.lastReconnectAt = Date.now();
+      void this.connectToWhatsapp(this.phoneNumber)
+        .catch((error) => {
+          this.logger.error(`Reconnect failed: ${String(error)}`);
+        })
+        .finally(() => {
+          this.reconnectInFlight = false;
+        });
+    }, delayMs);
   }
 
   private async connectionUpdate({ qr, connection, lastDisconnect }: Partial<ConnectionState>) {
