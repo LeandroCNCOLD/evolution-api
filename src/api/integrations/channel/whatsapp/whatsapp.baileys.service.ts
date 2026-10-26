@@ -816,7 +816,15 @@ export class BaileysStartupService extends ChannelStartupService {
         }));
 
         if (contactsRaw.length > 0) {
-          this.sendDataWebhook(Events.CONTACTS_UPSERT, contactsRaw);
+          // CN Cold: contato @lid vai para o webhook com o telefone (remoteJidAlt) quando o Baileys sabe
+          const contactsWebhook = await Promise.all(
+            contacts.map(async (contact, i) => {
+              if (!contact.id?.endsWith('@lid')) return contactsRaw[i];
+              const pn = (contact as any).phoneNumber || (await this.telefoneDoLid(contact.id));
+              return pn ? { ...contactsRaw[i], remoteJidAlt: pn } : contactsRaw[i];
+            }),
+          );
+          this.sendDataWebhook(Events.CONTACTS_UPSERT, contactsWebhook);
 
           if (this.configService.get<Database>('DATABASE').SAVE_DATA.CONTACTS)
             await this.prismaRepository.contact.createMany({ data: contactsRaw, skipDuplicates: true });
@@ -1041,6 +1049,12 @@ export class BaileysStartupService extends ChannelStartupService {
             } else if (participantJid) {
               m.pushName = participantJid.split('@')[0];
             }
+          }
+
+          // CN Cold: o histórico chega com @lid sem o número; preenche remoteJidAlt pelo mapa LID→telefone do Baileys
+          if (m.key.remoteJid?.endsWith('@lid') && !(m.key as any).remoteJidAlt) {
+            const pn = await this.telefoneDoLid(m.key.remoteJid);
+            if (pn) (m.key as any).remoteJidAlt = pn;
           }
 
           messagesRaw.push(this.prepareMessage(m));
@@ -3504,6 +3518,36 @@ export class BaileysStartupService extends ChannelStartupService {
   }
 
   // Chat Controller
+  // CN Cold: mapa LID → telefone (o Baileys guarda; a Evolution não expunha)
+  private lidCache = new Map<string, string | null>();
+
+  private async telefoneDoLid(lid: string): Promise<string | null> {
+    if (this.lidCache.has(lid)) return this.lidCache.get(lid) ?? null;
+    let pn: string | null = null;
+    try {
+      const r = await this.client?.signalRepository?.lidMapping?.getPNForLID(lid);
+      pn = typeof r === 'string' && r.includes('@') ? jidNormalizedUser(r) : null;
+    } catch {
+      pn = null;
+    }
+    if (pn || this.lidCache.size < 50_000) this.lidCache.set(lid, pn);
+    return pn;
+  }
+
+  /** POST /chat/lidParaTelefone/:instance  { numbers: ["123@lid", ...] } → [{ lid, jid }] (jid null se não souber) */
+  public async lidParaTelefone(data: WhatsAppNumberDto) {
+    const lids = (data.numbers ?? [])
+      .map((n) => String(n).trim())
+      .filter((n) => n.endsWith('@lid'))
+      .slice(0, 500);
+    const out: { lid: string; jid: string | null }[] = [];
+    for (const lid of lids) {
+      this.lidCache.delete(lid); // pergunta de novo: o mapa pode ter chegado depois
+      out.push({ lid, jid: await this.telefoneDoLid(lid) });
+    }
+    return out;
+  }
+
   public async whatsappNumber(data: WhatsAppNumberDto) {
     const jids: {
       groups: { number: string; jid: string }[];

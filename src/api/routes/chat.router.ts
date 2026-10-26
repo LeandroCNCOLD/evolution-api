@@ -45,6 +45,22 @@ export class ChatRouter extends RouterBroker {
   constructor(...guards: RequestHandler[]) {
     super();
     this.router
+      // CN Cold: telefone de cada contato @lid (histórico chega só com o LID)
+      .post(this.routerPath('lidParaTelefone'), ...guards, async (req, res) => {
+        try {
+          const response = await this.dataValidate<WhatsAppNumberDto>({
+            request: req,
+            schema: whatsappNumberSchema,
+            ClassRef: WhatsAppNumberDto,
+            execute: (instance, data) => chatController.lidParaTelefone(instance, data),
+          });
+
+          return res.status(HttpStatus.OK).json(response);
+        } catch (error) {
+          console.log(error);
+          return res.status(HttpStatus.BAD_REQUEST).json(error);
+        }
+      })
       .post(this.routerPath('whatsappNumbers'), ...guards, async (req, res) => {
         try {
           const response = await this.dataValidate<WhatsAppNumberDto>({

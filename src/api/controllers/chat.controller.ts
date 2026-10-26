@@ -22,6 +22,12 @@ import { Contact, Message, MessageUpdate } from '@prisma/client';
 export class ChatController {
   constructor(private readonly waMonitor: WAMonitoringService) {}
 
+  public async lidParaTelefone({ instanceName }: InstanceDto, data: WhatsAppNumberDto) {
+    const inst = this.waMonitor.waInstances[instanceName];
+    if (typeof inst?.lidParaTelefone !== 'function') return [];
+    return await inst.lidParaTelefone(data);
+  }
+
   public async whatsappNumber({ instanceName }: InstanceDto, data: WhatsAppNumberDto) {
     return await this.waMonitor.waInstances[instanceName].whatsappNumber(data);
   }
