@@ -3548,6 +3548,30 @@ export class BaileysStartupService extends ChannelStartupService {
     return out;
   }
 
+  /**
+   * POST /chat/telefoneParaLid/:instance  { numbers: ["5511987654321", ...] } → [{ pn, lid }]
+   * O WhatsApp informa o LID de um telefone (USync), mas não o contrário: assim casamos as conversas @lid
+   * com os telefones já conhecidos (agenda, clientes).
+   */
+  public async telefoneParaLid(data: WhatsAppNumberDto) {
+    const jids = [
+      ...new Set(
+        (data.numbers ?? [])
+          .map((n) => String(n).replace(/\D/g, ''))
+          .filter((n) => n.length >= 10 && n.length <= 15)
+          .map((n) => `${n}@s.whatsapp.net`),
+      ),
+    ].slice(0, 200);
+    if (!jids.length) return [];
+    const pares = (await this.client?.signalRepository?.lidMapping?.getLIDsForPNs(jids)) ?? [];
+    return pares
+      .map((p: { pn: string; lid: string }) => ({
+        pn: jidNormalizedUser(p.pn),
+        lid: jidNormalizedUser(p.lid),
+      }))
+      .filter((p) => p.pn.endsWith('@s.whatsapp.net') && p.lid.endsWith('@lid'));
+  }
+
   public async whatsappNumber(data: WhatsAppNumberDto) {
     const jids: {
       groups: { number: string; jid: string }[];
